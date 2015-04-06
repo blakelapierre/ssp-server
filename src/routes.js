@@ -11,39 +11,51 @@ module.exports = app => {
   const problems = {},
         tokens = {};
 
-  function* getProblem(token = uuid.v4()) {
+  function* getProblem(token) {
     console.log(this.request);
     const body = this.request.body;
 
-    const profile = tokens[token] = tokens[token] || {problems: []};
+    if (!token) {
+      token = uuid.v4();
+      console.log(`new token! ${token}`);
+    }
 
-    const range = 10000,
-          length = 100,
+    const profile = tokens[token] = tokens[token] || {};
+
+    const range = 1000000,
+          length = 1000,
           id = uuid.v4();
 
     if (problems[id]) throw new Error('Woah! Conflicting problem uuid!');
 
-    profile.problems.push(id);
+    profile.problem = id;
 
-    const problem = problems[id] = ssp.generate(length, range);
+    const params = {length, range},
+          problem = ssp.generate(length, range);
+
+    problems[id] = {params, problem};
+
+    console.log(`new problem! ${id} length: ${length} range: ${range}`);
 
     this.body = JSON.stringify({
       id,
       token,
-      params: {
-        length,
-        range
-      },
+      params,
       problem
     });
+
+    profile.generatedAt = new Date().getTime();
   }
 
   function* postSolution(id) {
-    console.log('solution for', id);
-    const problem = problems[id];
+    const receivedAt = new Date().getTime();
 
-    if (!problem) {
-      this.body = JSON.stringify({verified: false, message: 'Not a valid problem id!'});
+    const problemDef = problems[id];
+
+    if (!problemDef) {
+      const message = 'Not a valid problem id!';
+      console.log(message);
+      this.body = JSON.stringify({verified: false, message});
       return;
     }
 
@@ -52,21 +64,30 @@ module.exports = app => {
           profile = tokens[token];
 
     if (!profile) {
-      this.body = JSON.stringify({verified: false, message: 'Not a valid token!'});
+      const message = 'Not a valid token!';
+      console.log(message);
+      this.body = JSON.stringify({verified: false, message});
       return;
     }
 
-    const index = profile.problems.indexOf(id);
-    if (index < 0) {
-      this.body = JSON.stringify({verified: false, message: 'Not a valid problem id!'});
+    if (profile.problem !== id) {
+      const message = 'Not a valid problem id!';
+      console.log(message);
+      this.body = JSON.stringify({verified: false, message});
       return;
     }
 
-    profile.problems.splice(index, 1);
+    console.log(`solution received for ${id}`);
+
+    profile.problem = undefined;
+
+    const {problem} = problemDef;
 
     try {
       ssp.verify(problem, solution);
-      this.body = JSON.stringify({verified: true});
+      const spent = receivedAt - profile.generatedAt;
+      console.log(`problem ${id} solved in ${spent}ms`);
+      this.body = JSON.stringify({verified: true, time: spent});
     }
     catch (e) {
       this.body = JSON.stringify({verified: false, message: e.message});
