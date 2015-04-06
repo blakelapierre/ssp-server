@@ -17,7 +17,7 @@ module.exports = app => {
 
     const profile = tokens[token] = tokens[token] || {problems: []};
 
-    const max = 10000,
+    const range = 10000,
           length = 100,
           id = uuid.v4();
 
@@ -25,14 +25,14 @@ module.exports = app => {
 
     profile.problems.push(id);
 
-    const problem = problems[id] = ssp.generate(length, max);
+    const problem = problems[id] = ssp.generate(length, range);
 
     this.body = JSON.stringify({
       id,
       token,
       params: {
         length,
-        max
+        range
       },
       problem
     });
@@ -43,7 +43,7 @@ module.exports = app => {
     const problem = problems[id];
 
     if (!problem) {
-      this.body = JSON.stringify({verified: false, message: 'Not a valid problemm id!'});
+      this.body = JSON.stringify({verified: false, message: 'Not a valid problem id!'});
       return;
     }
 
