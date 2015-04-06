@@ -1,5 +1,7 @@
-const gulp = require('gulp'),
-      minimist = require('minimist');
+const browserify = require('browserify'),
+      gulp = require('gulp'),
+      minimist = require('minimist'),
+      source = require('vinyl-source-stream');
 
 const {
   cached,
@@ -12,7 +14,8 @@ const {
   sequence,
   sourcemaps,
   tasks,
-  traceur
+  traceur,
+  uglify
 } = require('gulp-load-plugins')();
 
 const args = minimist(process.argv.slice(2));
@@ -50,6 +53,26 @@ gulp.task('runtime', ['transpile'],
     ,gulp.dest(paths.dist)
   ])
   .on('error', function(e) { console.log(e); }));
+
+gulp.task('bundle', ['browserify'],
+  () => pipe([
+    gulp.src(['./.dist/app.js'])
+    ,uglify()
+    ,print()
+    ,gulp.dest(paths.dist)
+  ]));
+
+gulp.task('browserify', ['jshint'],
+  () => pipe([
+    browserify({
+      entries: ['./.dist/index.js'],
+      builtins: false,
+      detectGlobals: false
+    }).bundle()
+    ,source('app.js')
+    ,print()
+    ,gulp.dest(paths.dist)
+  ]));
 
 gulp.task('jshint',
   () => pipe([
