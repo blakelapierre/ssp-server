@@ -1,15 +1,24 @@
+import fs from 'fs';
+
 import route from 'koa-route';
 import uuid from 'uuid';
 import _ from 'lodash';
+import mkdirp from 'mkdirp';
 
 import ssp from 'ss-problem';
+import promise from 'promise-callback';
 
 module.exports = app => {
   app.use(route.get('/problem/:token?', getProblem));
   app.use(route.post('/solution/:id', postSolution));
+  app.use(route.get('/stats', getStats));
+  app.use(route.get('/stats/problem/:id', getStatsProblem));
+  app.use(route.get('/stats/tokens/:token', getStatsToken));
 
   const problems = {},
         tokens = {};
+
+  return {problems, tokens};
 
   function* getProblem(token) {
     console.log(this.request);
@@ -26,7 +35,20 @@ module.exports = app => {
           length = 1000,
           id = uuid.v4();
 
-    if (problems[id]) throw new Error('Woah! Conflicting problem uuid!');
+    if (problems[id]) {
+      this.status = 500;
+      this.body = 'Woah! Conflicting problem uuid!';
+      return;
+    }
+
+    if (profile.problem) {
+      delete problems[profile.problem];
+      delete tokens[token];
+
+      this.status = 500;
+      this.body = 'Didn\'t solve last problem. Generate a new token!';
+      return;
+    }
 
     profile.problem = id;
 
@@ -34,6 +56,8 @@ module.exports = app => {
           problem = ssp.generate(length, range);
 
     problems[id] = {params, problem};
+
+    writeProblem(token, id, params, problem);
 
     console.log(`new problem! ${id} length: ${length} range: ${range}`);
 
@@ -55,6 +79,8 @@ module.exports = app => {
     if (!problemDef) {
       const message = 'Not a valid problem id!';
       console.log(message);
+
+      this.status = 500;
       this.body = JSON.stringify({verified: false, message});
       return;
     }
@@ -66,6 +92,8 @@ module.exports = app => {
     if (!profile) {
       const message = 'Not a valid token!';
       console.log(message);
+
+      this.status = 500;
       this.body = JSON.stringify({verified: false, message});
       return;
     }
@@ -73,6 +101,8 @@ module.exports = app => {
     if (profile.problem !== id) {
       const message = 'Not a valid problem id!';
       console.log(message);
+
+      this.status = 500;
       this.body = JSON.stringify({verified: false, message});
       return;
     }
@@ -81,16 +111,98 @@ module.exports = app => {
 
     profile.problem = undefined;
 
-    const {problem} = problemDef;
+    const {params, problem} = problemDef;
 
     try {
-      ssp.verify(problem, solution);
+      const verified = ssp.verify(problem, solution);
       const spent = receivedAt - profile.generatedAt;
-      console.log(`problem ${id} solved in ${spent}ms`);
-      this.body = JSON.stringify({verified: true, time: spent});
+
+      writeSolution(token, id, params, solution, spent, verified);
+
+      if (verified === undefined) {
+        console.log(`problem ${id} marked as no solution in ${spent}ms`);
+        this.body = JSON.stringify({verified: false, time: spent, message: 'Marked as no solution. Could not verify. Proceed.'});
+      }
+      else if (verified) {
+        console.log(`problem ${id} solved in ${spent}ms`);
+        this.body = JSON.stringify({verified: true, time: spent});
+      }
+      else {
+        console.log('should never reach this point!');
+      }
     }
     catch (e) {
       this.body = JSON.stringify({verified: false, message: e.message});
     }
   }
+
+  function* getStats() {
+    this.body = JSON.stringify({tokens, problems: _.mapValues(problems, problem => { return problem.params; })});
+  }
+
+  function* getStatsProblem(id) {
+    this.body = JSON.stringify(problems[id]);
+  }
+
+  function* getStatsToken(token) {
+    this.body = tokens[token];
+  }
 };
+
+function writeProblem(token, id, params, problem) {
+  const {length, range} = params,
+        directory = `tokens/${token}/${length}/${range}/${id}`;
+
+  promise(mkdirp, directory)
+    .then(() => promise(fs.writeFile, `${directory}/problem`, JSON.stringify(problem)))
+    .then(() => console.log(`Wrote problem ${id} to ${directory}`));
+}
+
+function writeSolution(token, id, params, solution, timeSpent, verified) {
+  const {length, range} = params,
+        directory = `tokens/${token}/${length}/${range}/${id}`;
+
+  promise(mkdirp, directory)
+    .then(() => promise(fs.writeFile, `${directory}/solution`, JSON.stringify({solution, timeSpent})))
+    .then(() => console.log(`Wrote solution ${id} to ${directory}`))
+    .then(() => updateTokenStats(token, id, params, solution, timeSpent, verified))
+    .then(() => updateTokenMetrics(token, params, timeSpent, verified));
+}
+
+function updateTokenStats(token, id, params, solution, timeSpent, verified) {
+  const directory = `tokens/${token}`;
+
+  return getTokenStats(token)
+          .then(stats => {
+            stats.solved = stats.solved || 0;
+            stats.verified = stats.verified || 0;
+            stats.solved++;
+            if (verified) stats.verified++;
+
+            return stats;
+          })
+          .then(stats => {
+            return promise(fs.writeFile, `tokens/${token}/stats`, JSON.stringify(stats));
+          });
+}
+
+function getTokenStats(token) {
+  return new Promise((resolve, reject) => {
+    const directory = `tokens/${token}`;
+
+    promise(fs.readFile, `${directory}/stats`)
+      .then(
+        contents => resolve(JSON.parse(contents)),
+        error => {
+          resolve({});
+        });
+  });
+}
+
+function updateTokenMetrics(token, params ,timeSpent, verified) {
+  const file = `tokens/${token}/metrics`,
+        {length, range} = params,
+        data = `${length} ${range} ${timeSpent} ${verified}\n`;
+
+  return promise(fs.appendFile, file, data);
+}

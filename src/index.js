@@ -13,7 +13,7 @@ app.use(logger());
 app.use(gzip());
 app.use(body({limit: 10 * 1024 * 1024}));
 
-routes(app);
+const {problems, tokens} = routes(app);
 
 const port = process.env.port || 3000;
 app.listen(port);
