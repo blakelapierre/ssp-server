@@ -8,6 +8,8 @@ import mkdirp from 'mkdirp';
 import ssp from 'ss-problem';
 import promise from 'promise-callback';
 
+const dataDir = process.env.data_dir || 'data';
+
 module.exports = app => {
   app.use(route.get('/problem/:token?', getProblem));
   app.use(route.post('/solution/:id', postSolution));
@@ -29,11 +31,7 @@ module.exports = app => {
       console.log(`new token! ${token}`);
     }
 
-    const profile = tokens[token] = tokens[token] || {};
-
-    const range = 1000000,
-          length = 1000,
-          id = uuid.v4();
+    const tokenProfile = tokens[token] = tokens[token] || {lastParams: {length: 1, range: 1}};
 
     if (problems[id]) {
       this.status = 500;
@@ -41,8 +39,8 @@ module.exports = app => {
       return;
     }
 
-    if (profile.problem) {
-      delete problems[profile.problem];
+    if (tokenProfile.problem) {
+      delete problems[tokenProfile.problem];
       delete tokens[token];
 
       this.status = 500;
@@ -50,15 +48,16 @@ module.exports = app => {
       return;
     }
 
-    profile.problem = id;
+    const {id, params, problem} = generateProblem(tokenProfile);
 
-    const params = {length, range},
-          problem = ssp.generate(length, range);
+    tokenProfile.problem = id;
+    tokenProfile.lastParams = params;
 
     problems[id] = {params, problem};
 
     writeProblem(token, id, params, problem);
 
+    const {length, range} = params;
     console.log(`new problem! ${id} length: ${length} range: ${range}`);
 
     this.body = JSON.stringify({
@@ -68,7 +67,7 @@ module.exports = app => {
       problem
     });
 
-    profile.generatedAt = new Date().getTime();
+    tokenProfile.generatedAt = new Date().getTime();
   }
 
   function* postSolution(id) {
@@ -87,9 +86,9 @@ module.exports = app => {
 
     const body = this.request.body,
           {token, solution} = body,
-          profile = tokens[token];
+          tokenProfile = tokens[token];
 
-    if (!profile) {
+    if (!tokenProfile) {
       const message = 'Not a valid token!';
       console.log(message);
 
@@ -98,7 +97,7 @@ module.exports = app => {
       return;
     }
 
-    if (profile.problem !== id) {
+    if (tokenProfile.problem !== id) {
       const message = 'Not a valid problem id!';
       console.log(message);
 
@@ -109,13 +108,16 @@ module.exports = app => {
 
     console.log(`solution received for ${id}`);
 
-    profile.problem = undefined;
+    tokenProfile.problem = undefined;
+    tokenProfile.lastSolvedAt = receivedAt;
+
+    delete problems[id];
 
     const {params, problem} = problemDef;
 
     try {
       const verified = ssp.verify(problem, solution);
-      const spent = receivedAt - profile.generatedAt;
+      const spent = receivedAt - tokenProfile.generatedAt;
 
       writeSolution(token, id, params, solution, spent, verified);
 
@@ -149,9 +151,32 @@ module.exports = app => {
   }
 };
 
+function generateProblem(tokenProfile) {
+  const id = uuid.v4(),
+        params = getNewParams(tokenProfile),
+        {length, range} = params,
+        problem = ssp.generate(length, range);
+
+  return {id, params, problem};
+}
+
+function getNewParams(tokenProfile) {
+  let {length, range} = tokenProfile.lastParams;
+
+  if (Math.log2(range / length) > Math.log2(length)) {
+    length++;
+    range = length;
+  }
+  else {
+    range *= 2;
+  }
+
+  return {length, range};
+}
+
 function writeProblem(token, id, params, problem) {
   const {length, range} = params,
-        directory = `tokens/${token}/${length}/${range}/${id}`;
+        directory = `${dataDir}/tokens/${token}/${length}/${range}/${id}`;
 
   promise(mkdirp, directory)
     .then(() => promise(fs.writeFile, `${directory}/problem`, JSON.stringify(problem)))
@@ -160,7 +185,7 @@ function writeProblem(token, id, params, problem) {
 
 function writeSolution(token, id, params, solution, timeSpent, verified) {
   const {length, range} = params,
-        directory = `tokens/${token}/${length}/${range}/${id}`;
+        directory = `${dataDir}/tokens/${token}/${length}/${range}/${id}`;
 
   promise(mkdirp, directory)
     .then(() => promise(fs.writeFile, `${directory}/solution`, JSON.stringify({solution, timeSpent})))
@@ -170,7 +195,7 @@ function writeSolution(token, id, params, solution, timeSpent, verified) {
 }
 
 function updateTokenStats(token, id, params, solution, timeSpent, verified) {
-  const directory = `tokens/${token}`;
+  const directory = `${dataDir}/tokens/${token}`;
 
   return getTokenStats(token)
           .then(stats => {
@@ -182,13 +207,13 @@ function updateTokenStats(token, id, params, solution, timeSpent, verified) {
             return stats;
           })
           .then(stats => {
-            return promise(fs.writeFile, `tokens/${token}/stats`, JSON.stringify(stats));
+            return promise(fs.writeFile, `${dataDir}/tokens/${token}/stats`, JSON.stringify(stats));
           });
 }
 
 function getTokenStats(token) {
   return new Promise((resolve, reject) => {
-    const directory = `tokens/${token}`;
+    const directory = `${dataDir}/tokens/${token}`;
 
     promise(fs.readFile, `${directory}/stats`)
       .then(
@@ -200,7 +225,7 @@ function getTokenStats(token) {
 }
 
 function updateTokenMetrics(token, params ,timeSpent, verified) {
-  const file = `tokens/${token}/metrics`,
+  const file = `${dataDir}/tokens/${token}/metrics`,
         {length, range} = params,
         data = `${length} ${range} ${timeSpent} ${verified}\n`;
 

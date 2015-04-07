@@ -1,4 +1,4 @@
-import ssp from '../ssp';
+import ssp from 'ss-problem';
 
 console.log(ssp);
 
@@ -20,4 +20,26 @@ function check(problem, solution) {
   catch (e) {
     console.log(e);
   }
+}
+
+
+const profile = {lastParams: {length: 1, range: 1}};
+
+for (var i = 0; i < 100000; i++) {
+  profile.lastParams = getNewParams(profile);
+  console.log(profile);
+}
+
+function getNewParams(profile) {
+  let {length, range} = profile.lastParams;
+
+  if (Math.log2(range / length) > Math.log2(length)) {
+    length++;
+    range = length;
+  }
+  else {
+    range *= 2;
+  }
+
+  return {length, range};
 }
